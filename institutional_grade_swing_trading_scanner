@@ -1,0 +1,612 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import os
+import json
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from datetime import datetime
+
+# ------------------ STOCK UNIVERSE ------------------
+STOCKS = [
+    # Large Caps
+    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS', 
+    'HINDUNILVR.NS', 'SBIN.NS', 'BHARTIARTL.NS', 'KOTAKBANK.NS', 'LT.NS', 
+    'AXISBANK.NS', 'ITC.NS', 'ASIANPAINT.NS', 'MARUTI.NS', 'TITAN.NS', 
+    'SUNPHARMA.NS', 'ULTRACEMCO.NS', 'NESTLEIND.NS', 'BAJFINANCE.NS', 
+    'WIPRO.NS', 'ONGC.NS', 'NTPC.NS', 'POWERGRID.NS', 'TATAMOTORS.NS', 
+    'TATASTEEL.NS', 'ADANIENT.NS', 'JSWSTEEL.NS', 'INDUSINDBK.NS',
+    'TECHM.NS', 'HCLTECH.NS', 'HEROMOTOCO.NS', 'EICHERMOT.NS', 
+    'COALINDIA.NS', 'HINDALCO.NS', 'BRITANNIA.NS', 'DIVISLAB.NS', 
+    'BAJAJFINSV.NS', 'DRREDDY.NS', 'CIPLA.NS', 'GRASIM.NS', 
+    'TATACONSUM.NS', 'APOLLOHOSP.NS',
+    
+    # Mid Caps for Swing Trading
+    'MPHASIS.NS', 'PERSISTENT.NS', 'COFORGE.NS', 'LTTS.NS', 
+    'POLYCAB.NS', 'ESCORTS.NS', 'ASTRAL.NS', 'DIXON.NS',
+    'BALKRISIND.NS', 'CUMMINSIND.NS', 'ABBOTINDIA.NS', 'MANYAVAR.NS',
+    'TATAELXSI.NS', 'LAURUSLABS.NS', 'ALKEM.NS', 'JUBLFOOD.NS',
+    'IPCALAB.NS', 'OFSS.NS', 'SYNGENE.NS', 'BATAINDIA.NS', 'MUTHOOTFIN.NS',
+    'POLYCAB.NS', 'CUMMINSIND.NS', 'HDFCAMC.NS', 'MAXHEALTH.NS', 'UTIAMC.NS',
+    'TDPOWERSYS.NS', 'CAMS.NS', 'FORTIS.NS',
+    'M&MFIN.NS', 'RADICO.NS', 'BBTC.NS',
+    'SUZLON.NS', 'HAL.NS', 'ITC.NS', 'LGEINDIA.NS', 'SHAREINDIA.NS',
+    'CEATLTD.NS', 'WAAREERTL.NS', 'ADANIPOWER.NS', 'ETERNAL.NS', 'WHIRLPOOL.NS',
+    'BLS.NS', 'TCS.NS', 'M&M.NS', 'SILVERBEES.NS', 'SOUTHBANK.NS',
+    'POCL.NS', 'TRENT.NS', 'MCX.NS', 'GMBREW.NS', 'TVSMOTOR.NS',
+    'SWIGGY.NS', 'LTIM.NS', 'LT.NS', 'ADANIENSOL.NS', 'ADANIPORTS.NS',
+    'ATHERENERG.NS', 'HINDZINC.NS', 'HYUNDAI.NS', 'CDSL.NS', 'INDIGO.NS',
+    'KEI.NS', 'JSWSTEEL.NS', 'DIXON.NS', 'TATACAP.NS', 'HINDALCO.NS',
+    
+    #smallcap stocks for Swing Trading
+    'MPHASIS.NS', 'PERSISTENT.NS', 'COFORGE.NS', 'LTTS.NS', 'POLYCAB.NS',
+    'ESCORTS.NS', 'ASTRAL.NS', 'DIXON.NS', 'BALKRISIND.NS', 'CUMMINSIND.NS',
+    'ABBOTINDIA.NS', 'MANYAVAR.NS', 'TATAELXSI.NS', 'LAURUSLABS.NS', 'ALKEM.NS',
+    'JUBLFOOD.NS', 'IPCALAB.NS', 'OFSS.NS', 'SYNGENE.NS', 'BATAINDIA.NS',
+    'LAURUSLABS.NS', 'MCX.NS', 'KAYNES.NS', 'POONAWALLA.NS', 'RADICO.NS',
+    'ASTERDM.NS', 'NH.NS', 'CHOLAHLDNG.NS', 'DELHIVERY.NS', 'CDSL.NS',
+    'HINDCOPPER.NS', 'GODIGIT.NS', 'GLAND.NS', 'AEGISVOPAK.NS', 'GILLETTE.NS',
+    'NBCC.NS', 'GRSE.NS', 'STARHEALTH.NS', 'AMBER.NS', 'AEGISLOG.NS',
+]
+
+# Reports directory
+REPORTS_DIR = "reports"
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
+# Previous week JSON path
+PREV_WEEK_FILE = "previous_week.json"
+PREV_WEEK_PATH = os.path.join(REPORTS_DIR, PREV_WEEK_FILE)
+
+# EMAIL CONFIGURATION
+EMAIL_CONFIG = {
+    'sender_email': 'kashinath.lokhande@gmail.com',
+    'sender_password': 'ppqm qjew fsmy zvgu',  # 16-char app password
+    'recipient_email': 'kashinath.lokhande@gmail.com',
+    'smtp_server': 'smtp.gmail.com',
+    'smtp_port': 587,
+    'send_reports': True
+}
+
+# ------------------ CONFIGURATION ------------------
+CONFIDENCE_THRESHOLD = 75  # Only stocks with ≥90% confidence
+LOOKBACK_PERIOD = 90  #6 months of data
+SMA_SHORT = 15
+SMA_LONG = 40
+EMA_SHORT = 20
+EMA_LONG = 100
+RSI_PERIOD = 20
+RSI_OVERSOLD = 80
+RSI_OVERBOUGHT = 75
+VOLUME_SPIKE_MULTIPLIER = 1.2
+PREV_WEEK_FILE = 'previous_week.json'
+
+# ------------------ Adaptive Parameters ------------------
+
+def fetch_india_vix():
+    try:
+        vix_ticker = yf.Ticker("^INDIAVIX")
+        vix_data = vix_ticker.history(period="1d")
+        current_vix = vix_data['Close'].iloc[-1]
+        return current_vix
+    except Exception as e:
+        print(f"❌ Unable to fetch India VIX: {str(e)}")
+        return 22.0  # Default moderate volatility
+
+def adaptive_parameters(vix_value):
+    if vix_value > 30:  # High volatility
+        return {
+            'CONFIDENCE_THRESHOLD': 85,
+            'VOLUME_SPIKE_MULTIPLIER': 1.6,
+            'RSI_OVERSOLD': 25,
+            'RSI_OVERBOUGHT': 75,
+            'SMA_SHORT': 20,
+            'SMA_LONG': 50,
+            'EMA_SHORT': 50,
+            'EMA_LONG': 100,
+            'LOOKBACK_PERIOD': 120,
+            'RSI_PERIOD': 14
+        }
+    elif vix_value < 20:  # Low volatility
+        return {
+            'CONFIDENCE_THRESHOLD': 70,
+            'VOLUME_SPIKE_MULTIPLIER': 1.2,
+            'RSI_OVERSOLD': 30,
+            'RSI_OVERBOUGHT': 70,
+            'SMA_SHORT': 15,
+            'SMA_LONG': 40,
+            'EMA_SHORT': 20,
+            'EMA_LONG': 60,
+            'LOOKBACK_PERIOD': 90,
+            'RSI_PERIOD': 20
+        }
+    else:  # Moderate volatility
+        return {
+            'CONFIDENCE_THRESHOLD': 75,
+            'VOLUME_SPIKE_MULTIPLIER': 1.4,
+            'RSI_OVERSOLD': 28,
+            'RSI_OVERBOUGHT': 72,
+            'SMA_SHORT': 18,
+            'SMA_LONG': 45,
+            'EMA_SHORT': 30,
+            'EMA_LONG': 80,
+            'LOOKBACK_PERIOD': 100,
+            'RSI_PERIOD': 16
+        }
+
+VIX_VALUE = fetch_india_vix()
+config = adaptive_parameters(VIX_VALUE)
+
+print(f"📈 India VIX: {VIX_VALUE}")
+print("🛠️ Adaptive parameters set:")
+for k,v in config.items():
+    print(f"   {k} = {v}")
+
+# ------------------ Indicator calculation helpers ------------------
+
+def calculate_rsi(data, period):
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_ema(data, period):
+    return data['Close'].ewm(span=period, adjust=False).mean()
+
+def calculate_sma(data, period):
+    return data['Close'].rolling(window=period).mean()
+
+def check_volume_spike(data, multiplier):
+    avg_volume = data['Volume'].iloc[-20:-1].mean()
+    recent_volume = data['Volume'].iloc[-1]
+    return recent_volume > (avg_volume * multiplier)
+
+def calculate_confidence(signals):
+    total = len(signals)
+    positive = sum(signals.values())
+    return round((positive / total) * 100, 2)
+
+def analyze_stock(stock_symbol):
+    try:
+        ticker = yf.Ticker(stock_symbol)
+        data = ticker.history(period='6mo')
+        if len(data) < config['LOOKBACK_PERIOD']:
+            return None
+
+        data[f'SMA_{config["SMA_SHORT"]}'] = calculate_sma(data, config['SMA_SHORT'])
+        data[f'SMA_{config["SMA_LONG"]}'] = calculate_sma(data, config['SMA_LONG'])
+        data[f'EMA_{config["EMA_SHORT"]}'] = calculate_ema(data, config['EMA_SHORT'])
+        data[f'EMA_{config["EMA_LONG"]}'] = calculate_ema(data, config['EMA_LONG'])
+        data['RSI'] = calculate_rsi(data, config['RSI_PERIOD'])
+        data['Volume_MA'] = data['Volume'].rolling(window=20).mean()
+
+        latest = data.iloc[-1]
+        prev = data.iloc[-2]
+
+        signals = {}
+        sma_short = f'SMA_{config["SMA_SHORT"]}'
+        sma_long = f'SMA_{config["SMA_LONG"]}'
+        ema_short = f'EMA_{config["EMA_SHORT"]}'
+        ema_long = f'EMA_{config["EMA_LONG"]}'
+
+        signals['SMA_Breakout'] = int(data[sma_short].iloc[-2] <= data[sma_long].iloc[-2] and data[sma_short].iloc[-1] > data[sma_long].iloc[-1])
+        signals['Price_Above_SMA'] = int(latest['Close'] > latest[sma_short] and latest['Close'] > latest[sma_long])
+        signals['EMA_Golden_Cross'] = int(data[ema_short].iloc[-2] <= data[ema_long].iloc[-2] and data[ema_short].iloc[-1] > data[ema_long].iloc[-1])
+        signals['EMA_Bullish'] = int(latest[ema_short] > latest[ema_long])
+        signals['RSI_Optimal'] = int(config['RSI_OVERSOLD'] < latest['RSI'] < config['RSI_OVERBOUGHT'])
+        signals['Volume_Spike'] = int(check_volume_spike(data, config['VOLUME_SPIKE_MULTIPLIER']))
+        signals['Bullish_Candle'] = int(latest['Close'] > latest['Open'])
+        signals['Higher_Highs'] = int(data['High'].tail(5).iloc[-1] > data['High'].tail(5).iloc[0])
+
+        confidence = calculate_confidence(signals)
+
+        if confidence >= 90:
+            signal = 'STRONG BUY'
+        elif confidence >= config['CONFIDENCE_THRESHOLD']:
+            signal = 'BUY'
+        elif confidence >= 60:
+            signal = 'WEAK BUY'
+        else:
+            signal = 'HOLD'
+
+        current_price = latest['Close']
+        atr = data['High'].rolling(14).max() - data['Low'].rolling(14).min()
+        stop_loss = current_price - (atr.iloc[-1] * 0.5)
+        target = current_price + (current_price - stop_loss) * 2
+
+        return {
+            'Stock': stock_symbol.replace('.NS', ''),
+            'Close': round(current_price, 2),
+            'Signal': signal,
+            'Confidence': confidence,
+            'RSI': round(latest['RSI'], 2),
+            f'SMA_{config["SMA_SHORT"]}': round(latest[sma_short], 2),
+            f'SMA_{config["SMA_LONG"]}': round(latest[sma_long], 2),
+            f'EMA_{config["EMA_SHORT"]}': round(latest[ema_short], 2),
+            f'EMA_{config["EMA_LONG"]}': round(latest[ema_long], 2),
+            'Volume_Spike': '✅' if signals['Volume_Spike'] else '❌',
+            'Target': round(target, 2),
+            'Stop_Loss': round(stop_loss, 2),
+            'Upside_%': round(((target - current_price) / current_price) * 100, 2),
+            'Signals': signals
+        }
+    except Exception as e:
+        print(f"❌ Error analyzing {stock_symbol}: {e}")
+        return None
+
+def load_previous_week():
+    if os.path.exists(PREV_WEEK_PATH):
+        with open(PREV_WEEK_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+def save_current_week(picks):
+    top_5 = picks.head(5)[['Stock', 'Close', 'Signal', 'Confidence']].to_dict('records')
+    with open(PREV_WEEK_PATH, 'w', encoding='utf-8') as f:
+        json.dump({
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'picks': top_5
+        }, f, indent=2)
+
+def compare_with_previous_week(current_results, prev_week_data):
+    if not prev_week_data or 'picks' not in prev_week_data:
+        return []
+    recommendations = []
+    prev_picks = {pick['Stock']: pick for pick in prev_week_data['picks']}
+    for stock in current_results['Stock']:
+        if stock in prev_picks:
+            prev_pick = prev_picks[stock]
+            current_row = current_results[current_results['Stock'] == stock].iloc[0]
+            prev_confidence = prev_pick['Confidence']
+            current_confidence = current_row['Confidence']
+            if current_confidence >= 90:
+                action = 'ADD ⬆️' if current_confidence > prev_confidence else 'HOLD ✅'
+            elif current_confidence >= 75:
+                action = 'HOLD ➖'
+            else:
+                action = 'SELL ⬇️'
+            recommendations.append({
+                'Stock': stock,
+                'Previous_Confidence': prev_confidence,
+                'Current_Confidence': current_confidence,
+                'Recommendation': action,
+                'Price_Change_%': round(((current_row['Close'] - prev_pick['Close']) / prev_pick['Close']) * 100, 2)
+            })
+    return recommendations
+
+def generate_html_report(results, recommendations):
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Swing Trading Report - {datetime.now().strftime('%Y-%m-%d')}</title>
+        <style>
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                margin: 20px;
+                background-color: #f5f5f5;
+            }}
+            h1, h2 {{
+                color: #2c3e50;
+                border-bottom: 3px solid #3498db;
+                padding-bottom: 10px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+                background-color: white;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            th {{
+                background-color: #3498db;
+                color: white;
+                padding: 12px;
+                text-align: left;
+                font-weight: bold;
+            }}
+            td {{
+                padding: 10px;
+                border-bottom: 1px solid #ddd;
+            }}
+            tr:hover {{
+                background-color: #f2f2f2;
+            }}
+            .strong-buy {{
+                background-color: #d4edda;
+                font-weight: bold;
+            }}
+            .buy {{
+                background-color: #fff3cd;
+            }}
+            .timestamp {{
+                color: #7f8c8d;
+                font-size: 14px;
+            }}
+            .summary {{
+                background-color: white;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            .email-header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                text-align: center;
+                margin-bottom: 20px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="email-header">
+            <h1>🎯 Institutional-Grade Swing Trading Report</h1>
+            <p>📧 Automated Email Report | 🗓️ {datetime.now().strftime('%A, %B %d, %Y')}</p>
+            <p class="timestamp">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}</p>
+        </div>
+        
+        <div class="summary">
+            <h3>📊 Market Scan Summary</h3>
+            <p><strong>🔍 Total Stocks Analyzed:</strong> {len(STOCKS)}</p>
+            <p><strong>✅ High Confidence Opportunities (≥{CONFIDENCE_THRESHOLD}%):</strong> {len(results)}</p>
+            <p><strong>🎯 Strong Buy Signals:</strong> {len(results[results['Signal'] == 'STRONG BUY'])}</p>
+            <p><strong>📈 Average Confidence:</strong> {round(results['Confidence'].mean(), 1)}%</p>
+            <p><strong>💰 Average Upside Potential:</strong> {round(results['Upside_%'].mean(), 1)}%</p>
+        </div>
+    """
+    
+    html += f"""
+        <h2>🏆 Top Stock Picks (Confidence ≥{CONFIDENCE_THRESHOLD}%)</h2>
+        <table>
+            <tr>
+                <th>Rank</th>
+                <th>Stock</th>
+                <th>Price</th>
+                <th>Signal</th>
+                <th>Confidence</th>
+                <th>RSI</th>
+                <th>Volume Spike</th>
+                <th>Target</th>
+                <th>Stop Loss</th>
+                <th>Upside %</th>
+            </tr>
+    """
+    
+    for idx, row in results.iterrows():
+        row_class = 'strong-buy' if row['Signal'] == 'STRONG BUY' else 'buy' if row['Signal'] == 'BUY' else ''
+        html += f"""
+            <tr class="{row_class}">
+                <td><strong>#{idx + 1}</strong></td>
+                <td><strong>{row['Stock']}</strong></td>
+                <td>₹{row['Close']}</td>
+                <td>{row['Signal']}</td>
+                <td><strong>{row['Confidence']}%</strong></td>
+                <td>{row['RSI']}</td>
+                <td>{row['Volume_Spike']}</td>
+                <td>₹{row['Target']}</td>
+                <td>₹{row['Stop_Loss']}</td>
+                <td><strong>+{row['Upside_%']}%</strong></td>
+            </tr>
+        """
+    
+    html += "</table>"
+    
+    if recommendations:
+        html += """
+            <h2>📈 Previous Week Position Updates</h2>
+            <table>
+                <tr>
+                    <th>Stock</th>
+                    <th>Previous Confidence</th>
+                    <th>Current Confidence</th>
+                    <th>Price Change %</th>
+                    <th>Action Required</th>
+                </tr>
+        """
+        for rec in recommendations:
+            price_color = 'color: green;' if rec['Price_Change_%'] > 0 else 'color: red;'
+            html += f"""
+                <tr>
+                    <td><strong>{rec['Stock']}</strong></td>
+                    <td>{rec['Previous_Confidence']}%</td>
+                    <td>{rec['Current_Confidence']}%</td>
+                    <td style="{price_color}"><strong>{rec['Price_Change_%']:+.2f}%</strong></td>
+                    <td><strong>{rec['Recommendation']}</strong></td>
+                </tr>
+            """
+        html += "</table>"
+    
+    html += f"""
+        <div class="summary">
+            <h3>📋 Trading Action Items</h3>
+            <ul>
+                <li>🎯 <strong>New Entries:</strong> Consider {len(results[results['Signal'] == 'STRONG BUY'])} STRONG BUY signals</li>
+                <li>📊 <strong>Risk Management:</strong> Use provided stop losses for all positions</li>
+                <li>💰 <strong>Profit Targets:</strong> Book 50% profits at calculated targets</li>
+                <li>🔄 <strong>Position Reviews:</strong> {'Review ' + str(len(recommendations)) + ' existing positions' if recommendations else 'No existing positions to review'}</li>
+            </ul>
+        </div>
+        
+        <div class="summary">
+            <h3>🔬 Technical Analysis Methodology</h3>
+            <p><strong>This report uses 8 institutional-grade indicators:</strong></p>
+            <ul>
+                <li>📈 SMA Breakout (20/50) - Short-term momentum</li>
+                <li>✅ Price Above SMAs - Trend confirmation</li>
+                <li>🌟 EMA Golden Cross (50/200) - Long-term strength</li>
+                <li>📊 EMA Bullish Alignment - Market structure</li>
+                <li>⚡ RSI Optimization - Momentum without overbought risk</li>
+                <li>📊 Volume Spike Detection - Institutional interest</li>
+                <li>🕯️ Bullish Candle Patterns - Buying pressure</li>
+                <li>📈 Higher Highs Confirmation - Uptrend validation</li>
+            </ul>
+            <p><strong>Confidence Score:</strong> (Positive Signals ÷ 8) × 100</p>
+            <p><strong>Risk-Reward:</strong> All targets calculated with 1:2 risk-reward ratio using ATR</p>
+        </div>
+        
+        <div class="summary">
+            <h3>⚠️ Important Disclaimers</h3>
+            <p><strong>📧 Automated System:</strong> This report is generated automatically every time you run the scanner.</p>
+            <p><strong>🎓 Educational Purpose:</strong> This analysis is for educational purposes only and should not be considered as financial advice.</p>
+            <p><strong>💼 Risk Warning:</strong> All trading involves risk. Never risk more than 2% of your capital on any single trade.</p>
+            <p><strong>📚 Do Your Research:</strong> Always conduct additional research before making investment decisions.</p>
+            <p><strong>👨‍💼 Consult Professionals:</strong> Consider consulting with a qualified financial advisor.</p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px; padding: 20px; background-color: #ecf0f1; border-radius: 10px;">
+            <p style="margin: 0; color: #7f8c8d;"><strong>📈 Happy Trading! 💰</strong></p>
+            <p style="margin: 0; color: #7f8c8d; font-size: 12px;">Report generated by Enhanced Swing Trading Scanner</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+def send_email_report(html_content, csv_filename, results_count):
+    if not EMAIL_CONFIG['send_reports']:
+        print("📧 Email sending disabled in configuration")
+        return False
+    try:
+        msg = MIMEMultipart('alternative')
+        timestamp = datetime.now().strftime('%Y-%m-%d')
+        msg['From'] = EMAIL_CONFIG['sender_email']
+        msg['To'] = EMAIL_CONFIG['recipient_email']
+        msg['Subject'] = f'🎯 Swing Trading Report - {results_count} Opportunities Found | {timestamp}'
+
+        text_body = f"""
+🎯 SWING TRADING SCANNER REPORT
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}
+
+📊 SUMMARY:
+✅ High Confidence Opportunities Found: {results_count}
+🎯 Confidence Threshold: ≥{config['CONFIDENCE_THRESHOLD']}%
+📈 Total Stocks Analyzed: {len(STOCKS)}
+
+📎 Attached Files:
+- HTML Report
+- CSV Report
+
+⚠️ DISCLAIMER: This is for educational purposes only. Always do your own research.
+
+📈 Happy Trading! 💰
+        """
+        msg.attach(MIMEText(text_body, 'plain'))
+        msg.attach(MIMEText(html_content, 'html'))
+
+        with open(csv_filename, 'rb') as attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename= {os.path.basename(csv_filename)}')
+            msg.attach(part)
+
+        print(f"📧 Connecting to {EMAIL_CONFIG['smtp_server']}...")
+        server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
+        server.starttls()
+        print("🔐 Authenticating...")
+        server.login(EMAIL_CONFIG['sender_email'], EMAIL_CONFIG['sender_password'])
+        print("📤 Sending email...")
+        server.sendmail(EMAIL_CONFIG['sender_email'], EMAIL_CONFIG['recipient_email'], msg.as_string())
+        server.quit()
+        print(f"✅ Email sent successfully to {EMAIL_CONFIG['recipient_email']}")
+        return True
+    except Exception as e:
+        print(f"❌ Error sending email: {str(e)}")
+        return False
+
+def main():
+    print("=" * 80)
+    print("🚀 INSTITUTIONAL-GRADE SWING TRADING SCANNER WITH EMAIL & ADAPTIVE PARAMETERS")
+    print("=" * 80)
+    print(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}")
+    print(f"📊 Analyzing {len(STOCKS)} stocks using adaptive parameters based on VIX ({VIX_VALUE:.2f})")
+    print(f"🎯 Confidence Threshold: ≥{config['CONFIDENCE_THRESHOLD']}%")
+    print(f"📧 Email Reports: {'Enabled' if EMAIL_CONFIG['send_reports'] else 'Disabled'}")
+    if EMAIL_CONFIG['send_reports']:
+        print(f"📮 Recipient: {EMAIL_CONFIG['recipient_email']}")
+    print("=" * 80)
+    print()
+
+    results = []
+    total = len(STOCKS)
+
+    for idx, stock in enumerate(STOCKS, 1):
+        print(f"Processing {idx}/{total}: {stock.replace('.NS', '')}...", end=' ')
+        result = analyze_stock(stock)
+        if result and result['Confidence'] >= config['CONFIDENCE_THRESHOLD']:
+            results.append(result)
+            print(f"✅ Confidence: {result['Confidence']}%")
+        else:
+            print("❌ Below threshold")
+
+    print()
+    print("=" * 80)
+
+    if not results:
+        print("❌ No stocks met the confidence threshold.")
+        if EMAIL_CONFIG['send_reports']:
+            no_results_html = "<html><body><h2>No Opportunities Found</h2></body></html>"
+            send_email_report(no_results_html, "", 0)
+        return
+
+    df = pd.DataFrame(results).sort_values('Confidence', ascending=False).reset_index(drop=True)
+
+    prev_week = load_previous_week()
+    recommendations = compare_with_previous_week(df, prev_week)
+
+    print(f"✅ Found {len(df)} high-confidence opportunities!")
+    print()
+    print("🏆 TOP PICKS:")
+    print()
+    print(df[['Stock', 'Close', 'Signal', 'Confidence', 'RSI', 'Volume_Spike', 'Target', 'Stop_Loss', 'Upside_%']].to_string(index=False))
+
+    if recommendations:
+        print()
+        print("=" * 80)
+        print("📈 PREVIOUS WEEK COMPARISON:")
+        print()
+        rec_df = pd.DataFrame(recommendations)
+        print(rec_df.to_string(index=False))
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    csv_filename = os.path.join(REPORTS_DIR, f'swing_trading_report_{timestamp}.csv')
+    df.to_csv(csv_filename, index=False)
+    print()
+    print(f"💾 CSV Report saved: {csv_filename}")
+
+    html_filename = os.path.join(REPORTS_DIR, f'swing_trading_report_{timestamp}.html')
+    html_content = generate_html_report(df, recommendations)
+    with open(html_filename, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print(f"💾 HTML Report saved: {html_filename}")
+
+    if EMAIL_CONFIG['send_reports']:
+        print()
+        print("=" * 40)
+        email_success = send_email_report(html_content, csv_filename, len(df))
+        if email_success:
+            print("🎉 Email report delivered successfully!")
+        else:
+            print("⚠️ Email delivery failed, but reports are saved locally")
+        print("=" * 40)
+
+    save_current_week(df)
+    print(f"💾 Top 5 picks saved for next week comparison")
+
+    print()
+    print("=" * 80)
+    print("✅ Analysis Complete!")
+    if EMAIL_CONFIG['send_reports']:
+        print("📧 Email report sent with HTML and CSV attachments")
+    print("=" * 80)
+
+if __name__ == "__main__":
+    main()
